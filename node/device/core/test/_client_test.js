@@ -327,16 +327,18 @@ describe('Client', function () {
     it('connects the receiver if there\'s a listener on the message event', function (done) {
       var receiver = new EventEmitter();
       receiver.on = sinon.spy();
-      var DummyTransport = function () {
-        this.open = function (callback) {
+      var dummyTransport = {
+        connect: function (callback) {
           callback(null, new results.Connected());
-        };
-        this.getReceiver = function (callback) {
+        },
+        getReceiver: function (callback) {
           callback(null, receiver);
-        };
+        },
+        removeListener: function() {},
+        on: function() {},
       };
 
-      var client = new Client(new DummyTransport());
+      var client = new Client(dummyTransport);
       client.on('message', function () { });
       client.open(function (err, result) {
         if (err) {
@@ -359,6 +361,94 @@ describe('Client', function () {
         });
 
         transport.emit('disconnect');
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_063: [The `open` method shall throw if called while the client is already trying to connect.]*/
+    it('throws if called while already connecting', function() {
+      var transport = {
+        connect: sinon.stub(), // doesn't call the callback
+        removeAllListeners: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open(); 
+      // state is now 'CONNECTING'
+      assert.throws(function() {
+        client.open();
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_062: [The `open` method shall throw if called while the client is being closed.]*/
+    it('throws if called while disconnecting', function() {
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()), 
+        disconnect: sinon.stub(), // doesn't call the callback
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open(function() {
+        client.close();
+        // state is now DISCONNECTING
+        assert.throws(function() {
+          client.open();
+        });
+      }); 
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_060: [The `open` method shall call the `openCallback` callback with a null error object and a `results.Connected()` result object if the transport is already connected, doesn't need to connect or has just connected successfully.]*/
+    it('calls the callback without trying to connect if already connected', function(testCallback) {
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open(function(err) {
+        if (err) {
+          testCallback(err);
+        } else {
+          client.open(testCallback);
+        }
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_064: [The `open` method shall call the `openCallback` immediately with a null error object and a `results.Connected()` object if called while renewing the shared access signature.]*/
+    it('calls the callback without trying connect while updating the shared access signature', function(testCallback) {
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+        updateSharedAccessSignature: sinon.stub(), // will not call any callback and block in that state
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+      client.open(function(err) {
+        if (err) {
+          testCallback(err);
+        } else {
+          client.updateSharedAccessSignature('newsas');
+          client.open(testCallback);
+        }
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_061: [The `open` method shall not throw if the `openCallback` callback has not been provided.]*/
+    it('doesn\'t throw if the callback hasn\'t been passed as argument', function() {
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      assert.doesNotThrow(function() {
+        client.open();
       });
     });
   });
@@ -402,6 +492,260 @@ describe('Client', function () {
         });
       });
     });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_057: [The `close` method shall throw if called while the client is already being closed.]*/
+    it('throws if called while disconnecting', function() {
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()), 
+        disconnect: sinon.stub(), // doesn't call the callback
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open(function() {
+        client.close();
+        // state is now DISCONNECTING
+        assert.throws(function() {
+          client.close();
+        });
+      });
+    });
+
+    /*Test_SRS_NODE_DEVICE_CLIENT_16_001: [The `close` function shall call the transport's `disconnect` function if it exists.]*/
+    it('disconnects the transport if called while updating the shared access signature', function(testCallback){
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, null, new results.Connected()), 
+        disconnect: sinon.stub().callsArgWith(0, null, new results.Disconnected()), 
+        updateSharedAccessSignature: sinon.stub(), // doesn't call the callback
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+      client.open(function() {
+        client.updateSharedAccessSignature('newSas');
+        // state is now "UPDATING_SAS"
+        client.close(testCallback);
+      });
+    });
+
+    /*Test_SRS_NODE_DEVICE_CLIENT_16_001: [The `close` function shall call the transport's `disconnect` function if it exists.]*/
+    it('closes the transport when called while connecting', function(testCallback) {
+      var transport = {
+        connect: function() {}, // blocks the state machine in the 'CONNECTING' state 
+        disconnect: function(callback) { callback(null, new results.Disconnected()); },
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open();
+      client.close(testCallback);
+    });
+  });
+
+  ['sendEvent', 'sendEventBatch', 'complete', 'reject', 'abandon'].forEach(function(funcName) {
+    describe('#' + funcName, function() {
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_052: [The `sendEventBatch` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_048: [The `sendEvent` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_068: [The `complete` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_072: [The `reject` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_076: [The `abandon` method shall automatically connect the transport if necessary.]*/
+      it('calls connect on the transport if disconnected', function(testCallback) {
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          removeListener: function () {},
+          on: function () {}
+        };
+
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client[funcName]('testMessage', function(err) {
+          if (err) {
+            testCallback(err);
+          } else {
+            assert(transport.connect.called);
+            testCallback();
+          }
+        });
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_053: [If the transport fails to connect, the `sendEventBatch` method shall call the `sendEventBatchCallback` method with the error returned while trying to connect.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_049: [If the transport fails to connect, the `sendEvent` method shall call the `sendEventCallback` method with the error returned while trying to connect.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_069: [If the transport fails to connect, the `complete` method shall call the `completeCallback` method with the error returned while trying to connect.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_073: [If the transport fails to connect, the `reject` method shall call the `rejectCallback` method with the error returned while trying to connect.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_077: [If the transport fails to connect, the `abandon` method shall call the `abandonCallback` method with the error returned while trying to connect.]*/
+      it('calls its callback with an error if connecting the transport fails', function(testCallback) {
+        var openErr = new errors.UnauthorizedError();
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, openErr),
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          removeListener: function () {},
+          on: function () {}
+        };
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+
+        var client = new Client(transport);
+        client[funcName]('testMessage', function(err) {
+          assert.strictEqual(err, openErr);
+          testCallback();
+        });
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_052: [The `sendEventBatch` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_048: [The `sendEvent` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_068: [The `complete` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_072: [The `reject` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_076: [The `abandon` method shall automatically connect the transport if necessary.]*/
+      it('doesn\'t call connect on the transport if it\'s already connected', function(testCallback) {
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          removeListener: function () {},
+          on: function () {}
+        };
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client.open(function() {
+        assert(transport.connect.calledOnce);
+          client[funcName]('testMessage', function(err) {
+            assert(transport.connect.calledOnce);
+            assert.isFalse(transport.connect.calledTwice);
+            if (err) {
+              testCallback(err);
+            } else {
+              assert(transport.connect.called);
+              testCallback();
+            }
+          });
+        });
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_054: [The `sendEventBatch` method shall throw if called while the client is being closed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_050: [The `sendEvent` method shall throw if called while the client is being closed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_070: [The `complete` method shall throw if called while the client is being closed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_074: [The `reject` method shall throw if called while the client is being closed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_078: [The `abandon` method shall throw if called while the client is being closed.]*/
+      it('throws if called while disconnecting', function() {
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+          disconnect: sinon.stub(), // will not call the callback, leaving the state machine in a "DISCONNECTING" status.
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          removeListener: function () {},
+          on: function () {}
+        };
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client.open(function() {
+          client.close();
+          assert.throws(function() {
+            client[funcName]('message', function() {});
+          });
+        });
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_052: [The `sendEventBatch` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_048: [The `sendEvent` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_068: [The `complete` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_072: [The `reject` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_076: [The `abandon` method shall automatically connect the transport if necessary.]*/
+      it('queues the message if called while connecting', function(testCallback) {
+        var transport = {
+          connect: sinon.stub(), // will not call the callback, leaving the state machine in a "CONNECTING" status.
+          removeListener: function () {},
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          on: function () {}
+        };
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client.open();
+        client[funcName]('message', testCallback);
+        client._processMessageQueues();
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_052: [The `sendEventBatch` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_048: [The `sendEvent` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_068: [The `complete` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_072: [The `reject` method shall automatically connect the transport if necessary.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_076: [The `abandon` method shall automatically connect the transport if necessary.]*/
+      it('queues the message if called while updating the shared access signature', function(testCallback) {
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, null, new results.Connected()), 
+          removeListener: function () {},
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          on: function () {},
+          updateSharedAccessSignature: sinon.stub(), // will not call the callback, leaving the state machine in a "UPDATING_SAS" status.
+        };
+
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+        client.open(function() {
+          client.updateSharedAccessSignature('newsas');
+          client[funcName]('message', testCallback);
+          client._processMessageQueues();
+        });
+      });
+
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_051: [The `sendEventBatch` method shall not throw if the `sendEventBatchCallback` is not passed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_047: [The `sendEvent` method shall not throw if the `sendEventCallback` is not passed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_067: [The `complete` method shall not throw if the `completeCallback` is not passed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_071: [The `reject` method shall not throw if the `rejectCallback` is not passed.]*/
+      /*Tests_SRS_NODE_DEVICE_CLIENT_16_075: [The `abandon` method shall not throw if the `abandonCallback` is not passed.]*/
+      it('doesn\'t throw if no callback is given', function() {
+        var transport = {
+          connect: sinon.stub().callsArgWith(0, null, new results.Connected()),
+          removeListener: function () {},
+          sendEvent: function () {},
+          sendEventBatch: function () {},
+          complete: function() {},
+          reject: function() {},
+          abandon: function() {},
+          on: function () {}
+        };
+        sinon.stub(transport, funcName).callsArgWith(1, null, new results.MessageEnqueued());
+
+        var client = new Client(transport);
+        client.open(function() {
+          assert.doesNotThrow(function() {
+            client[funcName]('message');
+          });
+        });
+      });
+    });
   });
 
   describe('#events', function () {
@@ -410,7 +754,9 @@ describe('Client', function () {
       var DummyReceiver = function () {
         EventEmitter.call(this);
         this.emitMessage = function (msg) {
-          this.emit('message', msg);
+          process.nextTick(function() {
+            this.emit('message', msg);
+          }.bind(this));
         };
       };
       util.inherits(DummyReceiver, EventEmitter);
@@ -435,13 +781,18 @@ describe('Client', function () {
     });
 
     /*Tests_SRS_NODE_DEVICE_CLIENT_16_004: [The client shall start listening for messages from the service whenever there is a listener subscribed to the ‘message’ event.]*/
-    it('starts listening for messages when a listener subscribes to the message event', function () {
+    it('starts listening for messages when a listener subscribes to the message event', function (testCallback) {
       var DummyReceiver = function () {
         EventEmitter.call(this);
       };
       util.inherits(DummyReceiver, EventEmitter);
 
       var receiver = new DummyReceiver();
+      sinon.stub(receiver, 'on', function(evt) {
+        assert.strictEqual(evt, 'message');
+        testCallback();
+      });
+
       var DummyTransport = function () {
         EventEmitter.call(this);
         this.getReceiver = function (callback) {
@@ -454,21 +805,12 @@ describe('Client', function () {
 
       client.on('message', function () { });
       client.on('message', function () { });
-      assert.equal(receiver.listeners('message').length, 1, 'receiver.on was not called once.');
     });
 
     /*Tests_SRS_NODE_DEVICE_CLIENT_16_005: [The client shall stop listening for messages from the service whenever the last listener unsubscribes from the ‘message’ event.]*/
-    it('stops listening for messages when the last listener has unsubscribed', function () {
-      var DummyReceiver = function () {
-        EventEmitter.call(this);
-        this.emitMessage = function (msg) {
-          this.emit('message', msg);
-        };
-        this.removeAllListeners = sinon.spy();
-      };
-      util.inherits(DummyReceiver, EventEmitter);
-
-      var receiver = new DummyReceiver();
+    it('stops listening for messages when the last listener has unsubscribed', function (testCallback) {
+      var receiver = new EventEmitter();
+      sinon.spy(receiver, 'removeAllListeners');
       var DummyTransport = function () {
         EventEmitter.call(this);
         this.getReceiver = function (callback) {
@@ -483,10 +825,158 @@ describe('Client', function () {
       client.on('message', listener1);
       client.on('message', listener2);
 
-      client.removeListener('message', listener1);
-      assert.isFalse(receiver.removeAllListeners.calledOnce);
-      client.removeListener('message', listener2);
-      assert(receiver.removeAllListeners.calledOnce);
+      process.nextTick(function() {
+        client.removeListener('message', listener1);
+        assert.isFalse(receiver.removeAllListeners.calledOnce);
+        client.removeListener('message', listener2);
+        assert(receiver.removeAllListeners.calledOnce);
+        testCallback();
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_065: [The client shall connect the transport if needed to subscribe receive messages.]*/
+    it('receives messages after renewing the SAS if the event handler is registered while updating the SAS', function(testCallback) {
+      var DummyReceiver = function () {
+        EventEmitter.call(this);
+        this.emitMessage = function (msg) {
+          process.nextTick(function() {
+            this.emit('message', msg);
+          }.bind(this));
+        };
+      };
+      util.inherits(DummyReceiver, EventEmitter);
+
+      var receiver = new DummyReceiver();
+      var DummyTransport = function () {
+        EventEmitter.call(this);
+        this.getReceiver = function (callback) {
+          callback(null, receiver);
+        };
+        this.connect = function(callback) {
+          /* The process of reconnecting after updating the shared access signature
+           * later in the test should take long enough for the on('message') call 
+           * to hit the 'UPDATING_SAS' state of the state machine. 2 ticks is the minimum.
+           */
+          process.nextTick(function() {
+            process.nextTick(function() {
+              callback(null, new results.Connected());
+            });
+          });
+        };
+        this.updateSharedAccessSignature = function(newSas, callback) {
+          callback(null, new results.SharedAccessSignatureUpdated(true));
+        };
+      };
+      util.inherits(DummyTransport, EventEmitter);
+
+      var client = new Client(new DummyTransport());
+      client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+      client.open(function() {
+        client.updateSharedAccessSignature('newSas', function() {
+          // at that point the transport has reconnected, and the receiver should be reconnected too.
+          receiver.emitMessage(new Message());
+        });
+
+        client.on('message', function () {
+          testCallback();
+        });
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_065: [The client shall connect the transport if needed to subscribe receive messages.]*/
+    it('receives messages if the event handler is registered while connecting', function(testCallback) {
+      var DummyReceiver = function () {
+        EventEmitter.call(this);
+        this.emitMessage = function (msg) {
+          this.emit('message', msg);
+        };
+      };
+      util.inherits(DummyReceiver, EventEmitter);
+
+      var receiver = new DummyReceiver();
+      var DummyTransport = function () {
+        EventEmitter.call(this);
+        this.getReceiver = function (callback) {
+          callback(null, receiver);
+        };
+        this.connect = function(callback) {
+          /* The process of connecting should take long enough for the on('message') call 
+           * to hit the 'CONNECTING' state of the state machine. 2 ticks is the minimum.
+           */
+          process.nextTick(function() {
+            process.nextTick(function() {
+              callback(null, new results.Connected());
+            });
+          });
+        };
+      };
+      util.inherits(DummyTransport, EventEmitter);
+
+      var client = new Client(new DummyTransport());
+      client.open(function(){
+        receiver.emitMessage(new Message());
+      });
+
+      client.on('message', function () {
+        testCallback();
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_065: [The client shall connect the transport if needed to subscribe receive messages.]*/
+    it('receives messages if the event handler is registered while already connected', function(testCallback) {
+      var DummyReceiver = function () {
+        EventEmitter.call(this);
+        this.emitMessage = function (msg) {
+          this.emit('message', msg);
+        };
+      };
+      util.inherits(DummyReceiver, EventEmitter);
+
+      var receiver = new DummyReceiver();
+      var DummyTransport = function () {
+        EventEmitter.call(this);
+        this.getReceiver = function (callback) {
+          callback(null, receiver);
+        };
+        this.connect = function(callback) {
+          callback(null, new results.Connected());
+        };
+      };
+      util.inherits(DummyTransport, EventEmitter);
+
+      var client = new Client(new DummyTransport());
+      client.open(function(){
+        client.on('message', function () {
+          testCallback();
+        });
+
+        process.nextTick(function() {
+          receiver.emitMessage(new Message());
+        });
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_066: [The client shall emit an error if connecting the transport fails while subscribing to message events.]*/
+    it('emits an error if the transport cannot automatically connect when registering for message events', function(testCallback) {
+      var fakeError = new Error('fake error');
+      var transport = {
+        connect: sinon.stub().callsArgWith(0, fakeError),
+        sendEvent: function () {},
+        sendEventBatch: function () {},
+        complete: function() {},
+        reject: function() {},
+        abandon: function() {},
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.on('error', function(err) {
+        assert.equal(err, fakeError);
+        testCallback();
+      });
+
+      client.on('message', function() {});
     });
   });
 
@@ -535,22 +1025,19 @@ describe('Client', function () {
     });
 
     /*Codes_SRS_NODE_DEVICE_CLIENT_16_009: [The ‘done’ callback shall be called with a standard javascript Error object and no result object if the transport could not complete the message.]*/
-    it('calls the done callback with a null error object and a result', function (done) {
-      var DummyTransport = function () {
-        this.complete = function (message, callback) {
-          callback(null, new results.MessageCompleted());
-        };
+    it('calls the done callback with an error if the transport fails to complete the message', function (done) {
+      var testError = new Error('fake error');
+      var dummyTransport = {
+        complete: function (message, callback) {
+          callback(testError);
+        }
       };
 
-      var client = new Client(new DummyTransport());
+      var client = new Client(dummyTransport);
       var message = new Message();
-      client.complete(message, function (err, res) {
-        if (err) {
-          done(err);
-        } else {
-          assert.equal(res.constructor.name, 'MessageCompleted');
-          done();
-        }
+      client.complete(message, function (err) {
+        assert.strictEqual(err, testError);
+        done();
       });
     });
   });
@@ -600,22 +1087,19 @@ describe('Client', function () {
     });
 
     /*Codes_SRS_NODE_DEVICE_CLIENT_16_012: [The ‘done’ callback shall be called with a standard javascript Error object and no result object if the transport could not reject the message.]*/
-    it('calls the done callback with a null error object and a result', function (done) {
-      var DummyTransport = function () {
-        this.reject = function (message, callback) {
-          callback(null, new results.MessageRejected());
-        };
+    it('calls the done callback with an error if the transport fails to reject the message', function (done) {
+      var testError = new Error('fake error');
+      var dummyTransport = {
+        reject: function (message, callback) {
+          callback(testError);
+        }
       };
 
-      var client = new Client(new DummyTransport());
+      var client = new Client(dummyTransport);
       var message = new Message();
-      client.reject(message, function (err, res) {
-        if (err) {
-          done(err);
-        } else {
-          assert.equal(res.constructor.name, 'MessageRejected');
-          done();
-        }
+      client.reject(message, function (err) {
+        assert.strictEqual(err, testError);
+        done();
       });
     });
   });
@@ -665,22 +1149,19 @@ describe('Client', function () {
     });
 
     /*Codes_SRS_NODE_DEVICE_CLIENT_16_012: [The ‘done’ callback shall be called with a standard javascript Error object and no result object if the transport could not abandon the message.]*/
-    it('calls the done callback with a null error object and a result', function (done) {
-      var DummyTransport = function () {
-        this.abandon = function (message, callback) {
-          callback(null, new results.MessageAbandoned());
-        };
+    it('calls the done callback with an error if the transport fails to abandon the message', function (done) {
+      var testError = new Error('fake error');
+      var dummyTransport = {
+        abandon: function (message, callback) {
+          callback(testError);
+        }
       };
 
-      var client = new Client(new DummyTransport());
+      var client = new Client(dummyTransport);
       var message = new Message();
-      client.abandon(message, function (err, res) {
-        if (err) {
-          done(err);
-        } else {
-          assert.equal(res.constructor.name, 'MessageAbandoned');
-          done();
-        }
+      client.abandon(message, function (err) {
+        assert.strictEqual(err, testError);
+        done();
       });
     });
   });
@@ -734,15 +1215,17 @@ describe('Client', function () {
 
       var client = new Client(new DummyTransport(), null, new DummyBlobUploadClient());
       client.on('message', function () { });
-      client.updateSharedAccessSignature('sas', function (err, res) {
-        if (err) {
-          done(err);
-        } else {
-          assert.isFalse(res.needToReconnect);
-          assert(connectCalled);
-          assert(getReceiverCalled);
-          done();
-        }
+      client.open(function() {
+        client.updateSharedAccessSignature('sas', function (err, res) {
+          if (err) {
+            done(err);
+          } else {
+            assert.isFalse(res.needToReconnect);
+            assert(connectCalled);
+            assert(getReceiverCalled);
+            done();
+          }
+        });
       });
     });
 
@@ -798,6 +1281,98 @@ describe('Client', function () {
           assert.equal(res.constructor.name, 'SharedAccessSignatureUpdated');
           done();
         }
+      });
+    });
+
+    it('Should fail if the client is already trying to update the shared access signature', function(testCallback) {
+      var dummyTransport = {
+        open: sinon.stub.callsArgWith(0, null, new results.Connected()),
+        updateSharedAccessSignature: function (sas, callback) {
+          process.nextTick(function() {
+            callback(null, new results.SharedAccessSignatureUpdated());
+          });
+        }
+      };
+
+      var client = new Client(dummyTransport, null, new DummyBlobUploadClient());
+      client.open(function() {
+        client.updateSharedAccessSignature('sas', function (err, res) {
+          if (err) {
+            testCallback(err);
+          } else {
+            assert.equal(res.constructor.name, 'SharedAccessSignatureUpdated');
+            testCallback();
+          }
+        });
+
+        client.updateSharedAccessSignature('sas2', function(err) {
+          assert.instanceOf(err, Error);
+        });
+      });
+    });
+
+    it('should fail if called while connecting', function(testCallback){
+      var transport = {
+        connect: function() {}, // blocks the state machine in 'CONNECTING'
+        removeListener: function () {},
+        on: function () {}
+      };
+
+      var client = new Client(transport);
+      client.open();
+      client.updateSharedAccessSignature('newSas', function (err) {
+        assert.instanceOf(err, Error);
+        testCallback();
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_035: [The `updateSharedAccessSignature` method shall call the `done` callback with an error object if an error happened while renewing the token.]*/
+    it('should call its callback with an error if it the transport fails to update the shared access signature', function(testCallback){
+      var transport = {
+        connect: function(callback) { callback(null, new results.Connected()); }, // blocks the state machine in 'CONNECTING'
+        removeListener: function () {},
+        on: function () {},
+        updateSharedAccessSignature: function(sas, callback) {
+          callback(new Error('failed to reconnect'));
+        }
+      };
+
+      var client = new Client(transport);
+      client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+      client.open(function() {
+        client.updateSharedAccessSignature('newSas', function (err) {
+          assert.instanceOf(err, Error);
+          testCallback();
+        });
+      });
+    });
+
+    /*Tests_SRS_NODE_DEVICE_CLIENT_16_035: [The `updateSharedAccessSignature` method shall call the `done` callback with an error object if an error happened while renewing the token.]*/
+    it('should call its callback with an error if it the transport fails to reconnect', function(testCallback){
+      var calledOnce = false;
+      var transport = {
+        connect: function(callback) {
+          if (!calledOnce) {
+            calledOnce = true;
+            callback(null, new results.Connected());
+          } else {
+            callback(new Error('failed to reconnect'));
+          }
+        },
+        removeListener: function () {},
+        on: function () {},
+        updateSharedAccessSignature: function(sas, callback) {
+          callback(null, new results.SharedAccessSignatureUpdated(true));
+        }
+      };
+
+      var client = new Client(transport);
+      client.blobUploadClient = { updateSharedAccessSignature: function() {} };
+      client.open(function() {
+        client.updateSharedAccessSignature('newSas', function (err) {
+          assert.instanceOf(err, Error);
+          testCallback();
+        });
       });
     });
   });
