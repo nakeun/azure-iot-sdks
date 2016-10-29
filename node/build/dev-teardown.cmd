@@ -40,6 +40,7 @@ cd %node-root%\device\transport\mqtt
 echo -- Removing links for %cd% --
 call npm rm
 call npm rm azure-iot-device
+call npm rm azure-iot-common
 
 cd %node-root%\device\transport\http
 echo -- Removing links for %cd% --

@@ -52,17 +52,13 @@ client.sendEvent(new Message('hello world'), print);
 
 ### Public Methods
 
-#### open(done)
+#### open(openCallback)
 
 **SRS_NODE_DEVICE_CLIENT_12_001: [** The `open` function shall call the transport's `connect` function, if it exists. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_045: [** If the transport successfully establishes a connection the `open` method shall subscribe to the `disconnect` event of the transport. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_020: [** The `open` function should start listening for C2D messages if there are listeners on the `message` event **]**
-
-**SRS_NODE_DEVICE_CLIENT_16_063: [** The `open` method shall throw if called while the client is already trying to connect. **]**
-
-**SRS_NODE_DEVICE_CLIENT_16_062: [** The `open` method shall throw if called while the client is being closed. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_064: [** The `open` method shall call the `openCallback` immediately with a null error object and a `results.Connected()` object if called while renewing the shared access signature. **]** 
 
@@ -74,8 +70,6 @@ client.sendEvent(new Message('hello world'), print);
 **SRS_NODE_DEVICE_CLIENT_16_001: [** The `close` function shall call the transport's `disconnect` function if it exists. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_046: [** The `close` method shall remove the listener that has been attached to the transport `disconnect` event. **]**
-
-**SRS_NODE_DEVICE_CLIENT_16_057: [** The `close` method shall throw if called while the client is already being closed. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_056: [** The `close` method shall not throw if the `closeCallback` is not passed. **]**
 
@@ -96,8 +90,6 @@ The `sendEvent` method sends an event message to the IoT Hub as the device indic
 
 **SRS_NODE_DEVICE_CLIENT_16_049: [** If the transport fails to connect, the `sendEvent` method shall call the `sendEventCallback` method with the error returned while trying to connect. **]**
 
-**SRS_NODE_DEVICE_CLIENT_16_050: [** The `sendEvent` method shall throw if called while the client is being closed. **]**
-
 #### sendEventBatch(messages, sendEventBatchCallback)
 The `sendEventBatch` method sends a list of event messages to the IoT Hub as the device indicated in the constructor argument.
 
@@ -110,8 +102,6 @@ The `sendEventBatch` method sends a list of event messages to the IoT Hub as the
 **SRS_NODE_DEVICE_CLIENT_16_052: [** The `sendEventBatch` method shall automatically connect the transport if necessary. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_053: [** If the transport fails to connect, the `sendEventBatch` method shall call the `sendEventBatchCallback` method with the error returned while trying to connect. **]**
-
-**SRS_NODE_DEVICE_CLIENT_16_054: [** The `sendEventBatch` method shall throw if called while the client is being closed. **]**
 
 #### setTransportOptions(options, done)
 **`setTransportOptions` is deprecated and will be removed at the next major release.**
@@ -151,8 +141,6 @@ The `sendEventBatch` method sends a list of event messages to the IoT Hub as the
 
 **SRS_NODE_DEVICE_CLIENT_16_069: [** If the transport fails to connect, the `complete` method shall call the `completeCallback` method with the error returned while trying to connect. **]**
 
-**SRS_NODE_DEVICE_CLIENT_16_070: [** The `complete` method shall throw if called while the client is being closed. **]**
-
 #### reject(message, rejectCallback)
 
 **SRS_NODE_DEVICE_CLIENT_16_018: [** The `reject` method shall throw a ReferenceError if the `message` parameter is falsy. **]**
@@ -169,8 +157,6 @@ The `sendEventBatch` method sends a list of event messages to the IoT Hub as the
 
 **SRS_NODE_DEVICE_CLIENT_16_073: [** If the transport fails to connect, the `reject` method shall call the `rejectCallback` method with the error returned while trying to connect. **]**
 
-**SRS_NODE_DEVICE_CLIENT_16_074: [** The `reject` method shall throw if called while the client is being closed. **]**
-
 #### abandon(message, abandonCallback)
 
 **SRS_NODE_DEVICE_CLIENT_16_017: [** The `abandon` method shall throw a ReferenceError if the `message` parameter is falsy. **]**
@@ -186,8 +172,6 @@ The `sendEventBatch` method sends a list of event messages to the IoT Hub as the
 **SRS_NODE_DEVICE_CLIENT_16_076: [** The `abandon` method shall automatically connect the transport if necessary. **]**
 
 **SRS_NODE_DEVICE_CLIENT_16_077: [** If the transport fails to connect, the `abandon` method shall call the `abandonCallback` method with the error returned while trying to connect. **]**
-
-**SRS_NODE_DEVICE_CLIENT_16_078: [** The `abandon` method shall throw if called while the client is being closed. **]**
 
 #### updateSharedAccessSignature(sharedAccessSignature, done)
 
